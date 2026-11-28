@@ -227,6 +227,13 @@ template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
     else add(ItemDescription,context==ItemContext::InstalledUpgrade?InstalledUpgradeDescription(description):description);
     return out;
 }
+// Vendor definition amount, never proof of instance sellability.
+template<class Json> std::optional<uint32_t> VendorValue(const Json& extras,bool equippedLegendary=false){
+    if(equippedLegendary||!extras.is_object())return std::nullopt;
+    const auto it=extras.find("vendor_value");
+    if(it==extras.end()||!it->is_number_unsigned()||it->template get<uint64_t>()>UINT32_MAX)return std::nullopt;
+    return static_cast<uint32_t>(it->template get<uint64_t>());
+}
 // These are definition facts, not market value, sellability or proof that
 // a particular character can equip or acquire the item.
 template<class Json> std::vector<ItemDefinitionLine> ItemAcquisitionLines(const Json& extras){
@@ -237,7 +244,6 @@ template<class Json> std::vector<ItemDefinitionLine> ItemAcquisitionLines(const 
         out.push_back({ItemAcquisition,std::string(label)+it->dump()+unit});
     };
     number("level","Item level: ","");
-    number("vendor_value","API vendor value: "," copper");
     auto restrictions=extras.find("restrictions");
     if(restrictions!=extras.end()&&restrictions->is_array()&&!restrictions->empty()){
         std::string line;

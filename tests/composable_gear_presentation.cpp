@@ -78,7 +78,10 @@ int case_composable_gear_presentation(int, char**) {
     assert(lines.empty());
     const auto extras=AlterEgo::ReferenceExtras::ProjectItem(Json{{"level",80},{"vendor_value",0},{"restrictions",Json::array({"Human","Norn"})},{"flags",Json::array({"NoSell"})}});
     auto acquisition=ItemAcquisitionLines(extras);
-    assert(acquisition.size()==3&&acquisition[0].text=="Item level: 80"&&acquisition[1].text=="API vendor value: 0 copper"&&acquisition[2].text=="Restrictions: Human, Norn");
+    assert(acquisition.size()==2&&acquisition[0].text=="Item level: 80"&&acquisition[1].text=="Restrictions: Human, Norn");
+    assert(VendorValue(extras)==0&&!VendorValue(extras,true));
+    assert(VendorValue(Json{{"vendor_value",240u}})==240);
+    assert(!VendorValue(Json::object())&&!VendorValue(Json{{"vendor_value",-1}})&&!VendorValue(Json{{"vendor_value",4294967296ull}}));
     assert(ItemAcquisitionLines(Json::object()).empty());
     assert(ItemAcquisitionLines(Json{{"restrictions",Json::array()}}).empty());
     assert(!extras.contains("flags"));

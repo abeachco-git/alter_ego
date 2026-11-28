@@ -68,4 +68,25 @@ inline std::optional<int64_t> EstimateInstantSale(int64_t count,int buy){
     const auto fee=[gross](int percent){return (gross/100)*percent+((gross%100)*percent+99)/100;};
     return std::max<int64_t>(0,gross-fee(5)-fee(10));
 }
+struct ItemMarketQuote {
+    std::optional<int64_t> buyFromTP,sellToTP,netInstantSale;
+    std::string age;
+};
+// Exact cached quote only; not an admission or instance eligibility decision.
+inline std::optional<ItemMarketQuote> ProjectItemMarketQuote(const PriceInfo& p,uint32_t exactId,int64_t now,int64_t ttl){
+    if(!exactId||p.item_id!=exactId||!p.tradeable||p.fetched_at_unix<=0)return std::nullopt;
+    ItemMarketQuote out;
+    if(p.sell_quantity>0&&p.sell_price>0)out.buyFromTP=p.sell_price;
+    if(p.buy_quantity>0&&p.buy_price>0){
+        out.sellToTP=p.buy_price;out.netInstantSale=EstimateInstantSale(1,p.buy_price);
+    }
+    if(now<p.fetched_at_unix)out.age="Price age unknown (stale)";
+    else{
+        const auto minutes=(now-p.fetched_at_unix)/60;
+        out.age=minutes==0?"Updated just now":minutes<60?"Updated "+std::to_string(minutes)+"m ago":
+            "Updated "+std::to_string(minutes/60)+"h ago";
+        if(now-p.fetched_at_unix>=ttl)out.age+=" (stale)";
+    }
+    return out;
+}
 }

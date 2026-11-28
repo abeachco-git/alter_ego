@@ -136,6 +136,17 @@ int case_skin_search(int, char**) {
  assert(!ParseCommercePrices(404,R"({"text":"all ids provided are invalid"})",{1},100).at(1).tradeable);
  assert(EstimateInstantSale(250,3420)==726750);
  assert(EstimateInstantSale(1,1)==0);
+  {
+      PriceInfo p;p.item_id=42;p.tradeable=true;p.fetched_at_unix=100;p.buy_price=1000;p.buy_quantity=3;p.sell_price=2000;p.sell_quantity=4;
+      const auto q=ProjectItemMarketQuote(p,42,160,3600);
+      assert(q&&q->buyFromTP==2000&&q->sellToTP==1000&&q->netInstantSale==850&&q->age=="Updated 1m ago");
+      assert(!ProjectItemMarketQuote(p,41,160,3600));
+      assert(ProjectItemMarketQuote(p,42,3700,3600)->age=="Updated 1h ago (stale)");
+      p.buy_quantity=0;
+      assert(!ProjectItemMarketQuote(p,42,160,3600)->sellToTP&&!ProjectItemMarketQuote(p,42,160,3600)->netInstantSale);
+      p.tradeable=false;
+      assert(!ProjectItemMarketQuote(p,42,160,3600));
+  }
  assert(!EstimateInstantSale(9223372036854775807LL,2));
     {
         namespace W=AlterEgo::WikiArtwork;

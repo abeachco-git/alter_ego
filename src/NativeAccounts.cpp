@@ -2206,7 +2206,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             const auto name=item&&!item->name.empty()?item->name:std::to_string(id);
             ImGui::PushID(label);ImGui::PushID(index);
             ImGui::TextWrapped("%s: %s",label,name.c_str());
-            if(item&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*item);
+            if(item&&ImGui::IsItemHovered())RenderInstalledUpgradeTooltip(*item);
             UI::EntityContext("##inventory_socket",[&]{CopyEntityMenu(item?item->name:std::string{},LINK_ITEM,id);});
             ImGui::PopID();ImGui::PopID();
         };
@@ -2245,10 +2245,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         }
         if(status.price&&status.price->tradeable){
             const auto& p=*status.price;
-            ImGui::TextUnformatted("Buy order:");ImGui::SameLine();
-            if(p.buy_quantity>0&&p.buy_price>0)RenderCoins(p.buy_price);else ImGui::TextDisabled("No buy orders");
-            ImGui::TextUnformatted("Sell listing:");ImGui::SameLine();
-            if(p.sell_quantity>0&&p.sell_price>0)RenderCoins(p.sell_price);else ImGui::TextDisabled("No sell listings");
+            RenderItemMarketQuote(p,group.id,false,false);
             SellableQuantity all,matching;
             const auto f=v->inventory.flags.find(group.id);
             if(f!=v->inventory.flags.end()){
@@ -2296,7 +2293,10 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         if(flags->second.soulbound)ImGui::TextUnformatted("Character bound on acquire");
         if(flags->second.bindOnUse)ImGui::TextUnformatted("Binds on use");
     }
-    if(definition)RenderItemDefinitionDetails(*definition,TooltipCore::ItemAll,false);
+    if(definition){
+        RenderItemDefinitionDetails(*definition,TooltipCore::ItemAll,false);
+        RenderItemVendorValue(*definition);
+    }
     else if(meta&&meta->complete){
         // Retain a verified snapshot fallback without making it a competing owner.
         ItemInfo prior;prior.type=itemType;prior.rarity=itemRarity;prior.description=meta->description;prior.details=meta->details;

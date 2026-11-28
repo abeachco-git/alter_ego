@@ -53,6 +53,7 @@
 #include "SkinCache.h"
 #include "OwnedSkins.h"
 #include "Commerce.h"
+#include "CommercePriceCore.h"
 #include "PublicCatalog.h"
 #include "WikiEventRuntime.h"
 #include "SkinSearchCore.h"
@@ -3004,11 +3005,69 @@ static void RenderInstalledUpgradeDetails(const AlterEgo::ItemInfo& info){
     using namespace AlterEgo::TooltipCore;
     RenderItemDefinitionDetailsForContext(info,ItemAttributes|ItemEffects|ItemDescription,true,ItemContext::InstalledUpgrade);
 }
-static void RenderInstalledUpgradeTooltip(const AlterEgo::ItemInfo& info){
+static void RenderPriceRow(const char* label,const std::optional<int64_t>& value,const char* missing=nullptr){
+    if(!value&&!missing)return;
+    ImGui::TextUnformatted(label);ImGui::SameLine();
+    if(value)RenderCoins(*value);else ImGui::TextDisabled("%s",missing);
+}
+void RenderItemVendorValue(const AlterEgo::ItemInfo& info,bool equippedLegendary){
+    const auto vendor=AlterEgo::TooltipCore::VendorValue(info.optional_metadata,equippedLegendary);
+    if(vendor)RenderPriceRow("Vendor Value:",static_cast<int64_t>(*vendor));
+}
+void RenderItemMarketQuote(const Skinventory::PriceInfo& price,uint32_t exactId,bool includeNet,bool includeAge){
+    const auto quote=Skinventory::ProjectItemMarketQuote(price,exactId,
+        static_cast<int64_t>(std::time(nullptr)),Skinventory::Commerce::PriceTTL);
+    if(!quote)return;
+    RenderPriceRow("TP Buy:",quote->buyFromTP,"No sell listings");
+    RenderPriceRow("TP Sell:",quote->sellToTP,"No buy orders");
+    if(includeNet&&quote->netInstantSale)RenderPriceRow("Net Sale (1):",quote->netInstantSale);
+    if(includeAge)ImGui::TextDisabled("%s",quote->age.c_str());
+}
+static void RenderItemPriceFooter(const AlterEgo::ItemInfo& info,bool equipment=false,bool bound=false){
+    const bool equippedLegendary=equipment&&info.rarity=="Legendary";
+    const auto status=bound||equippedLegendary?Skinventory::ItemPriceStatus{}:
+        Skinventory::Commerce::GetItemPriceStatus(info.id);
+    const auto quote=status.price?Skinventory::ProjectItemMarketQuote(*status.price,info.id,
+        static_cast<int64_t>(std::time(nullptr)),Skinventory::Commerce::PriceTTL):std::nullopt;
+    if(!AlterEgo::TooltipCore::VendorValue(info.optional_metadata,equippedLegendary)&&!quote)return;
+    ImGui::Separator();
+    RenderItemVendorValue(info,equippedLegendary);
+    if(quote)RenderItemMarketQuote(*status.price,info.id,true,true);
+}
+static void RenderInstalledUpgradeRow(const std::string& name,const AlterEgo::ItemInfo* info){
+    ImGui::Spacing();
+    ImGui::Indent(12.f);
+    AlterEgo::UI::TooltipLine(name.c_str(),ImVec4(.4f,.7f,.9f,1.f));
+    if(info)RenderInstalledUpgradeDetails(*info);
+    ImGui::Unindent(12.f);
+}
+// Shared equipment body; adapters supply only their own verified facts.
+template<class Stats,class Upgrades,class Extras>
+static void RenderEquipmentTooltipBody(const AlterEgo::ItemInfo* info,bool bound,
+    Stats stats,Upgrades upgrades,Extras extras){
+    using namespace AlterEgo::TooltipCore;
+    if(info){
+        AlterEgo::UI::TooltipLine(info->rarity.c_str(),GetRarityColor(info->rarity));
+        RenderItemDefinitionDetails(*info,ItemType|ItemAcquisition);
+        RenderItemDefinitionDetails(*info,ItemCombat);
+    }
+    stats();
+    upgrades();
+    if(info){
+        ImGui::Spacing();
+        const auto context=info->type=="UpgradeComponent"||info->type=="Relic"?
+            ItemContext::InstalledUpgrade:ItemContext::Standalone;
+        RenderItemDefinitionDetailsForContext(*info,ItemEffects|ItemDescription|ItemUtility,true,context);
+    }
+    extras();
+    if(info)RenderItemPriceFooter(*info,true,bound);
+}
+void RenderInstalledUpgradeTooltip(const AlterEgo::ItemInfo& info){
     if(info.name.empty())return;
     ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
     AlterEgo::UI::TooltipLine(info.name.c_str(),GetRarityColor(info.rarity));
     RenderInstalledUpgradeDetails(info);
+    RenderItemPriceFooter(info,true);
     ImGui::EndTooltip();
 }
 void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info){
@@ -3016,6 +3075,7 @@ void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info){
     ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
     AlterEgo::UI::TooltipLine(info.name.c_str(),GetRarityColor(info.rarity));
     RenderItemDefinitionDetails(info);
+    RenderItemPriceFooter(info);
     ImGui::EndTooltip();
 }
 // Shared exact selected-stat presentation. Visible panels own metadata demand.
@@ -3041,8 +3101,11 @@ void RenderSavedItemTooltip(uint32_t itemId,uint32_t statId){
     const auto info=GW2API::GetItemInfo(itemId);if(!info||info->name.empty())return;
     ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
     UI::TooltipLine(info->name.c_str(),GetRarityColor(info->rarity));
-    RenderItemDefinitionDetails(*info,TooltipCore::ItemAll&~TooltipCore::ItemAttributes);
-    RenderSelectedItemStatDetails(itemId,statId);
+    RenderEquipmentTooltipBody(info.get(),false,[&]{
+        const auto stat=GW2API::GetItemStatInfo(statId);
+        if(stat&&!stat->name.empty())UI::TooltipLine(stat->name.c_str(),ImVec4(1.f,.85f,.4f,1.f));
+        RenderSelectedItemStatDetails(itemId,statId);
+    },[]{},[]{});
     ImGui::EndTooltip();
 }
 static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq, const char* slotName) {
@@ -3143,10 +3206,8 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             ImGui::BeginGroup();
             AlterEgo::UI::TooltipLine(display_name.c_str(),GetRarityColor(rarity));
 
+            RenderEquipmentTooltipBody(item_info.get(),!eq->binding.empty(),[&]{
             if(eq->charges>=0)ImGui::Text("Remaining charges: %lld",static_cast<long long>(eq->charges));
-
-            // Public definition facts remain separate from the equipped instance.
-            if(item_info)RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemCombat);
 
             // Stat type name (e.g. "Berserker's", "Minstrel's")
             if (eq->stat_id != 0) {
@@ -3178,44 +3239,22 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                     RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemAttributes);
             }
 
-            // Show the recorded infusion slots, including IDs whose public
-            // item metadata hasn't loaded yet.
-            if (infusionCount > 0) {
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.62f, 0.88f, 1.0f, 1.0f),
-                    "Infusions (%zu)", infusionCount);
-                for (uint32_t id : eq->infusions) {
-                    if (id == 0) continue;
-                    const auto info = AlterEgo::GW2API::GetItemInfo(id);
-                    if (info && !info->name.empty()){
-                        ImGui::BulletText("%s", info->name.c_str());
-                        RenderInstalledUpgradeDetails(*info);
-                    }else ImGui::BulletText("Infusion details unavailable");
-                }
+            },[&]{
+            if(infusionCount||std::any_of(eq->upgrades.begin(),eq->upgrades.end(),[](uint32_t id){return id!=0;}))ImGui::Separator();
+            for(auto id:eq->upgrades)if(id){
+                const auto info=AlterEgo::GW2API::GetItemInfo(id);
+                RenderInstalledUpgradeRow(info&&!info->name.empty()?info->name:"Upgrade details unavailable",info.get());
             }
-
-            // Upgrades (Runes/Sigils)
-            for (auto upgrade_id : eq->upgrades) {
-                if (upgrade_id == 0) continue;
-                const auto uinfo = AlterEgo::GW2API::GetItemInfo(upgrade_id);
-                ImGui::Spacing();
-                if(uinfo){
-                    ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", uinfo->name.c_str());
-                    RenderInstalledUpgradeDetails(*uinfo);
-                }else ImGui::TextDisabled("Upgrade details unavailable");
+            for(auto id:eq->infusions)if(id){
+                const auto info=AlterEgo::GW2API::GetItemInfo(id);
+                RenderInstalledUpgradeRow(info&&!info->name.empty()?info->name:"Infusion details unavailable",info.get());
             }
-
+            },[&]{
             // Transmuted skin — show original item name (the item before reskin)
             if (skin_info && item_info && skin_info->name != item_info->name) {
                 ImGui::Spacing();
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Transmuted");
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", item_info->name.c_str());
-            }
-
-            if(item_info){
-                ImGui::Spacing();
-                ImGui::TextColored(GetRarityColor(item_info->rarity),"%s",item_info->rarity.c_str());
-                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemAcquisition|AlterEgo::TooltipCore::ItemUtility);
             }
 
             // Skin unlock status — only show if locked (unlocked is implied for equipped items)
@@ -3252,6 +3291,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                 }
             }
 
+            });
             ImGui::EndGroup();
             ImGui::EndTooltip();
         }
@@ -9010,7 +9050,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         if(!label.empty()){
         ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
         AlterEgo::UI::TooltipLine(label.c_str(),ImVec4(.5f,.8f,.8f,1.f));
-        if(info)RenderInstalledUpgradeDetails(*info);
+        if(info){RenderInstalledUpgradeDetails(*info);RenderItemPriceFooter(*info,true);}
         // A name-only catalog entry cannot verify a relic effect.
         ImGui::EndTooltip();
         }
@@ -9019,39 +9059,32 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         const auto cachedItem=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
         if(cachedItem&&!cachedItem->name.empty())AlterEgo::UI::TooltipLine(cachedItem->name.c_str(),GetRarityColor(cachedItem->rarity));
         else AlterEgo::UI::TooltipLine(GearSlotDisplayName(slot),AlterEgo::UI::TooltipTitle);
-        if(cachedItem)RenderItemDefinitionDetails(*cachedItem,AlterEgo::TooltipCore::ItemAll&~AlterEgo::TooltipCore::ItemAttributes);
-        if(gearSlot){
-            const auto upgrade=[](const char* label,uint32_t id,const std::string& stored){
+        RenderEquipmentTooltipBody(cachedItem.get(),false,[&]{
+            if(hasWeaponType)AlterEgo::UI::TooltipLine(WeaponDisplayName(it->second.weapon_type),ImVec4(.8f,.75f,.5f,1.f));
+            if(hasStat){
+                AlterEgo::UI::TooltipLine(it->second.stat_name.c_str(),ImVec4(1.f,.8f,.2f,1.f));
+                RenderSelectedItemStatDetails(it->second.item_id,it->second.stat_id);
+            }
+        },[&]{
+            if(!gearSlot)return;
+            const bool hasUpgrade=gearSlot->rune_id||gearSlot->sigil_id||gearSlot->sigil2_id||
+                !gearSlot->rune.empty()||!gearSlot->sigil.empty()||!gearSlot->sigil2.empty()||infusionCount;
+            if(hasUpgrade)ImGui::Separator();
+            const auto upgrade=[](const char* fallback,uint32_t id,const std::string& stored){
                 if(!id&&stored.empty())return;
                 const auto info=AlterEgo::GW2API::GetItemInfo(id);
                 const auto name=AlterEgo::TooltipCore::EntityName(info?info->name:std::string{},stored);
-                if(!name.empty())AlterEgo::UI::TooltipLine((std::string(label)+": "+name).c_str());
-                if(info)RenderInstalledUpgradeDetails(*info);
+                RenderInstalledUpgradeRow(name.empty()?fallback:name,info.get());
             };
-            upgrade("Rune",gearSlot->rune_id,gearSlot->rune);upgrade("Sigil",gearSlot->sigil_id,gearSlot->sigil);upgrade("Second sigil",gearSlot->sigil2_id,gearSlot->sigil2);
-        }
-        if (hasWeaponType) {
-            ImGui::TextColored(ImVec4(0.8f, 0.75f, 0.5f, 1.0f), "%s", WeaponDisplayName(it->second.weapon_type));
-        }
-        if (hasStat) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s %s",
-                it->second.stat_name.c_str(), GearSlotDisplayName(slot));
-            RenderSelectedItemStatDetails(it->second.item_id,it->second.stat_id);
-        }
-        if (gearSlot && infusionCount > 0) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.62f, 0.88f, 1.0f, 1.0f),
-                "Infusions (%zu)", infusionCount);
+            upgrade("Rune details unavailable",gearSlot->rune_id,gearSlot->rune);
+            upgrade("Sigil details unavailable",gearSlot->sigil_id,gearSlot->sigil);
+            upgrade("Second sigil details unavailable",gearSlot->sigil2_id,gearSlot->sigil2);
             for(size_t i=0;i<AlterEgo::GearEdit::InfusionPositionCount(*gearSlot);++i){
                 const auto req=AlterEgo::GearEdit::InfusionPositionAt(*gearSlot,i);
-                if(!req.attribute.empty())ImGui::BulletText("Stat: %s",InfusionAttributeLabel(req.attribute));
-                else if(req.exactId){
-                    const auto info=AlterEgo::GW2API::GetItemInfo(req.exactId);
-                    if(info&&!info->name.empty()){ImGui::BulletText("%s",info->name.c_str());RenderInstalledUpgradeDetails(*info);}
-                    else ImGui::BulletText("Infusion details unavailable");
-                }
+                if(!req.attribute.empty())RenderInstalledUpgradeRow(std::string("Infusion: ")+InfusionAttributeLabel(req.attribute),nullptr);
+                else if(req.exactId)upgrade("Infusion details unavailable",req.exactId,{});
             }
-        }
+        },[]{});
         ImGui::EndTooltip();
     } else if (hovered) {
         ImGui::BeginTooltip();

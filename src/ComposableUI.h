@@ -331,7 +331,13 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
                     const auto exact=AlterEgo::TooltipCore::FieldId(item,"item_id");
                     if(exact&&(kind=="armor"||kind=="weapons"||kind=="trinkets"||kind=="aquatic"))
                         RenderSavedItemTooltip(exact,AlterEgo::TooltipCore::FieldId(item,"stat_id"));
-                    else if(ids.size()==1){const auto info=AlterEgo::GW2API::GetItemInfo(ids.front());if(info)RenderItemDefinitionTooltip(*info);}
+                    else if(ids.size()==1){
+                        const auto info=AlterEgo::GW2API::GetItemInfo(ids.front());
+                        if(info){
+                            if(info->type=="UpgradeComponent"||info->type=="Relic")RenderInstalledUpgradeTooltip(*info);
+                            else RenderItemDefinitionTooltip(*info);
+                        }
+                    }
                 }
                 if(ImGui::BeginPopupContextItem("##component_item_names")){
                     ComponentStoredNameActions(item);ImGui::EndPopup();

@@ -117,6 +117,10 @@ namespace AlterEgo { struct ItemInfo; }
 // Shared cached definition rendering, not equipped-instance evidence.
 void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts=AlterEgo::TooltipCore::ItemAll,bool tooltip=true);
 void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info);
+void RenderInstalledUpgradeTooltip(const AlterEgo::ItemInfo& info);
+void RenderItemVendorValue(const AlterEgo::ItemInfo& info,bool equippedLegendary=false);
+namespace Skinventory { struct PriceInfo; }
+void RenderItemMarketQuote(const Skinventory::PriceInfo& price,uint32_t exactId,bool includeNet,bool includeAge);
 void RenderSelectedItemStatDetails(uint32_t itemId,uint32_t statId,bool tooltip=true);
 void RenderSavedItemTooltip(uint32_t itemId,uint32_t statId);
 
