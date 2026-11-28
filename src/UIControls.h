@@ -74,13 +74,26 @@ inline void ActionMessage(const char* message,bool error=false){
     ImGui::TextWrapped("%s",message);
     if(error)ImGui::PopStyleColor();
 }
+inline float ActionButtonWidth(const char* label){
+    return std::max(80.f,ImGui::CalcTextSize(label,nullptr,true).x+2*ImGui::GetStyle().FramePadding.x);
+}
+inline float ActionPairWidth(const char* primary,const char* secondary){
+    return ActionButtonWidth(primary)+ActionButtonWidth(secondary)+ImGui::GetStyle().ItemSpacing.x;
+}
+// Reserve the footer width before the auto-resize modal measures its content.
+inline bool BeginConfirmationModal(const char* popup,const char* primary,const char* secondary="Cancel",ImGuiWindowFlags flags=0){
+    if(!ImGui::IsPopupOpen(popup))return false;
+    const auto minWidth=std::min(ActionPairWidth(primary,secondary)+2*ImGui::GetStyle().WindowPadding.x+2*ImGui::GetStyle().WindowBorderSize+2.f,
+        std::max(1.f,ImGui::GetIO().DisplaySize.x-2*ImGui::GetStyle().DisplaySafeAreaPadding.x));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth,0),ImVec2(FLT_MAX,FLT_MAX));
+    return ImGui::BeginPopupModal(popup,nullptr,flags|ImGuiWindowFlags_AlwaysAutoResize);
+}
 inline EditAction ActionFooter(const char* scope,bool enabled,const char* primary,
     const char* secondary="Cancel",ButtonRole role=ButtonRole::Standard,
     const char* reason=nullptr,bool pending=false,const char* error=nullptr){
     ImGui::PushID(scope);
-    const auto width=[](const char* label){return std::max(80.f,ImGui::CalcTextSize(label,nullptr,true).x+2*ImGui::GetStyle().FramePadding.x);};
-    const float primaryWidth=width(primary),secondaryWidth=width(secondary);
-    const bool fits=ImGui::GetContentRegionAvail().x>=primaryWidth+secondaryWidth+ImGui::GetStyle().ItemSpacing.x;
+    const float primaryWidth=ActionButtonWidth(primary),secondaryWidth=ActionButtonWidth(secondary);
+    const bool fits=ImGui::GetContentRegionAvail().x>=ActionPairWidth(primary,secondary);
     auto draw=[&](const char* label,float w,ButtonRole style,bool available,const char* why){
         if(!available){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
         const bool clicked=Button(label,ImVec2(w,0),style)&&available;
@@ -124,7 +137,7 @@ inline bool DiscardRequested(const char* popup,bool requested,bool dirty,bool pe
     if(decision==CloseDecision::Close)return true;
     if(decision==CloseDecision::ConfirmDiscard)ImGui::OpenPopup(popup);
     bool discard=false;
-    if(ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+    if(BeginConfirmationModal(popup,"Discard changes","Keep editing")){
         ImGui::TextWrapped("%s",message);
         const auto action=ActionFooter("discard",true,"Discard changes","Keep editing",ButtonRole::Destructive);
         if(action==EditAction::Save){discard=true;ImGui::CloseCurrentPopup();}

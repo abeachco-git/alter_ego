@@ -12384,7 +12384,7 @@ static void RenderBuildLibrary() {
         if(!ImGui::IsPopupOpen("Name Loadout##loadout_name_action")&&!g_LibNameAction.pending)g_LibNameTarget={};
     }
     if(g_LibDeletePending){g_LibDeletePending=false;ImGui::OpenPopup("Delete Loadout?##ctx");}
-    if(ImGui::BeginPopupModal("Delete Loadout?##ctx",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoMove)){
+    if(AlterEgo::UI::BeginConfirmationModal("Delete Loadout?##ctx","Delete","Cancel",ImGuiWindowFlags_NoMove)){
         const auto target=g_LibDeleteTarget;
         const bool valid=target.Current(AlterEgo::GW2API::GetBuildLibraryRevision())&&AlterEgo::RecordSelection::ById(AlterEgo::GW2API::GetSavedBuilds(),target.id)>=0;
         ImGui::TextWrapped("Delete \"%s\"?",target.name.c_str());

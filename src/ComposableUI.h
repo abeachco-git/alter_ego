@@ -1330,7 +1330,7 @@ static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,co
 static void RenderComponentDeleteConfirm(const ComponentJson& doc){
     auto& d=g_ComponentDelete;
     if(d.pending){d.pending=false;ImGui::OpenPopup("Delete unused component##ae");}
-    if(!ImGui::BeginPopupModal("Delete unused component##ae",nullptr,ImGuiWindowFlags_AlwaysAutoResize))return;
+    if(!AlterEgo::UI::BeginConfirmationModal("Delete unused component##ae","Delete"))return;
     const bool valid=d.revision==AlterEgo::GW2API::GetBuildLibraryRevision()&&
         ComponentUIFind(doc,d.kind,d.id)&&ComponentUIUsage(doc,d.kind,d.id)==0;
     ImGui::TextWrapped("Delete %s?",d.name.c_str());
@@ -1764,7 +1764,7 @@ static void RenderEquipmentSetLibrary() {
         if(!ImGui::IsPopupOpen("Name Equipment Set##set_name_action")&&!g_SetNameAction.pending)g_SetNameTarget={};
     }
     if(g_SetDeletePending){g_SetDeletePending=false;ImGui::OpenPopup("Delete equipment set?");}
-    if(ImGui::BeginPopupModal("Delete equipment set?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+    if(UI::BeginConfirmationModal("Delete equipment set?","Delete")){
         const bool valid=g_SetDeleteTarget.Current(GW2API::GetBuildLibraryRevision())&&usage[g_SetDeleteTarget.id]==0&&findSet(g_SetDeleteTarget.id)!=sets.end();
         ImGui::TextWrapped("Delete unused set '%s'? Its components are retained.",g_SetDeleteTarget.name.c_str());
         if(!valid)ImGui::TextWrapped("Library changed or the set is referenced. Cancel and review again.");
