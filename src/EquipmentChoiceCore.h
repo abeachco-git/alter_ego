@@ -28,6 +28,18 @@ inline bool WeaponTypeEligible(const std::string& slot,const std::string& type,
     if(!WeaponEnvironmentAllowed(slot,type))return false;
     return WeaponEligible(slot,mainhand,offhand,twoHanded);
 }
+enum EquipmentSections : unsigned {
+    ArmorSection=1,TrinketSection=2,WeaponSection=4,RelicSection=8,AquaticSection=16,AllEquipmentSections=31
+};
+inline unsigned ComponentSections(const std::string& kind){
+    if(kind=="armor"||kind=="runes")return ArmorSection;
+    if(kind=="trinkets")return TrinketSection;
+    if(kind=="weapons"||kind=="sigils")return WeaponSection;
+    if(kind=="infusions")return ArmorSection|TrinketSection|WeaponSection;
+    if(kind=="aquatic")return AquaticSection;
+    if(kind=="relic")return RelicSection;
+    return 0;
+}
 // Physical weapon families are independent of profession eligibility.
 struct PhysicalWeaponType {const char* name;bool mainhand,offhand,twoHanded;};
 inline constexpr PhysicalWeaponType PhysicalWeaponTypes[]={

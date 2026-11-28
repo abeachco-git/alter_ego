@@ -1521,7 +1521,7 @@ inline bool AssignCompatible(const Document& doc, const Loadout& target,
     if (kind == "base_build") {
         const std::string incomingProfession =
             incoming->data.value("profession", std::string());
-        if (!incomingProfession.empty() && !targetProfession.empty() &&
+        if (!targetProfession.empty() &&
             incomingProfession != targetProfession)
             return Fail(error, "Cannot assign a Base Build from another profession.");
     } else if (!targetProfession.empty()) {
@@ -1547,23 +1547,30 @@ inline bool Assign(Document& doc, const std::string& loadoutId,
         return true;
     }, error);
 }
+inline bool BaseProfessionEditAllowed(const Document& doc,const std::string& id,
+        const Json& previous,const Json& draft,std::string& error){
+    const auto before=previous.find("profession"),after=draft.find("profession");
+    if(before!=previous.end()&&!before->is_string())
+        return after!=draft.end()&&*after==*before ? true : Fail(error,"Unresolved Base Build profession cannot change without verified recovery.");
+    const auto old=previous.value("profession",std::string());
+    if(after!=draft.end()&&!after->is_string())return Fail(error,"Invalid Base Build profession.");
+    const auto next=draft.value("profession",std::string());
+    if(old==next)return true;
+    if(!old.empty())return Fail(error,"Cannot change saved Base Build profession.");
+    if(!ProfessionMetadata::Code(next))return Fail(error,"Choose a canonical Base Build profession.");
+    for(const auto& loadout:doc.loadouts){
+        const auto ref=loadout.refs.find("base_build");
+        if(ref!=loadout.refs.end()&&ref->second==id)return Fail(error,"Cannot change profession of a referenced Base Build.");
+    }
+    return true;
+}
 inline bool UpdateShared(Document& doc, const std::string& kind,
                          const std::string& id, const Json& data,
                          std::string& error) {
     return Transaction(doc, [&](Document& next, std::string& err) {
         auto* item = Find(next, kind, id);
         if (!item || !data.is_object()) return Fail(err, "Invalid shared component.");
-        if (kind == "base_build") {
-            const auto previous = item->data.value("profession", std::string());
-            const auto nextProfession = data.value("profession", std::string());
-            if (!previous.empty()&&previous!=nextProfession)return Fail(err,"Cannot change saved Base Build profession.");
-            if (previous != nextProfession)
-                for (const auto& loadout : next.loadouts) {
-                    auto ref = loadout.refs.find("base_build");
-                    if (ref != loadout.refs.end() && ref->second == id)
-                        return Fail(err, "Cannot change profession of a referenced Base Build.");
-                }
-        }
+        if(kind=="base_build"&&!BaseProfessionEditAllowed(next,id,item->data,data,err))return false;
         Json replacement=data;
         if(kind=="skills"&&!PreserveSkillsProfession(item->data,replacement,err))return false;
         item->data = std::move(replacement);
@@ -1671,16 +1678,7 @@ inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
         auto* item = Find(next, kind, id);
         if (!item || name.empty() || !data.is_object())
             return Fail(err, "Invalid shared component name or payload.");
-        if (kind == "base_build" &&
-            item->data.value("profession", std::string()) !=
-            data.value("profession", std::string())) {
-            if(!item->data.value("profession",std::string()).empty())return Fail(err,"Cannot change saved Base Build profession.");
-            for (const auto& loadout : next.loadouts) {
-                const auto ref = loadout.refs.find("base_build");
-                if (ref != loadout.refs.end() && ref->second == id)
-                    return Fail(err, "Cannot change profession of a referenced Base Build.");
-            }
-        }
+        if(kind=="base_build"&&!BaseProfessionEditAllowed(next,id,item->data,data,err))return false;
         if (ComponentNameKey(name) != ComponentNameKey(item->name) &&
             !ComponentNameAvailable(next, kind, name, id))
             return Fail(err, "A component with this name already exists.");

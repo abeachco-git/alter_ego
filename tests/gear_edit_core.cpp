@@ -22,6 +22,21 @@ struct Build {
 };
 int case_gear_edit_core(int, char**) {
     using namespace AlterEgo::GearEdit;
+    {
+        using namespace AlterEgo::EquipmentChoice;
+        assert(ComponentSections("armor")==ArmorSection&&ComponentSections("runes")==ArmorSection);
+        assert(ComponentSections("weapons")==WeaponSection&&ComponentSections("sigils")==WeaponSection);
+        assert(ComponentSections("trinkets")==TrinketSection&&ComponentSections("relic")==RelicSection);
+        assert(ComponentSections("infusions")==(ArmorSection|TrinketSection|WeaponSection));
+        assert(ComponentSections("aquatic")==AquaticSection);
+        assert(!ComponentSections("base_build")&&!ComponentSections("skills")&&!ComponentSections("pets")&&!ComponentSections("legends"));
+        for(const auto& type:PhysicalWeaponTypes){
+            const bool land=WeaponEnvironmentAllowed("WeaponA1",type.name);
+            assert(WeaponTypeEligible("WeaponA1",type.name,type.mainhand,type.offhand,type.twoHanded)==(land&&(type.mainhand||type.twoHanded)));
+            assert(WeaponTypeEligible("WeaponA2",type.name,type.mainhand,type.offhand,type.twoHanded)==(land&&type.offhand));
+            assert(WeaponTypeEligible("WeaponAquaticA",type.name,type.mainhand,type.offhand,type.twoHanded)==!land);
+        }
+    }
     Slot src, dst;
     src.infusion_ids = {42}; src.infusion_attributes = {"Power"};
     CopyInfusions(dst, src, InfusionCapacity("Ring1", false));

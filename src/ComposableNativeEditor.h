@@ -266,6 +266,10 @@ static bool BeginNativeGearField(const char* popup,const std::string& label,uint
     }
     draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),ImVec2(pos.x+6.f+(iconSize?iconSize+6.f:0.f),pos.y+4.f),
         IM_COL32(220,200,170,255),label.c_str(),nullptr,wrap);
+    if(ImGui::IsPopupOpen(popup)){
+        const auto display=ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowSize(ImVec2(std::min(360.f,std::max(1.f,display.x-24.f)),std::min(380.f,std::max(1.f,display.y-24.f))),ImGuiCond_Appearing);
+    }
     return ImGui::BeginPopup(popup);
 }
 static void ComponentNativeCatalogChoice(ComponentJson& item,
@@ -810,9 +814,12 @@ static void RenderComponentNativeEditor(const std::string& kind,
     }
     if (kind == "base_build") {
         const auto fixed=ComponentNativeProfession(kind,id,g_ComponentEditorBaseline);
-        if(fixed.empty()&&(!data.contains("specializations")||data.at("specializations").empty())){
+        const bool referenced=(g_ComponentEditorMode=="edit"||g_ComponentEditorMode=="copy_for_loadout")&&
+            !id.empty()&&ComponentUIUsage(ComponentUISnapshot(),kind,id)>0;
+        if(fixed.empty()&&!referenced&&(!data.contains("specializations")||data.at("specializations").empty())){
             RenderComponentProfessionChoice(profession,[&](const std::string& choice){profession=choice;data["profession"]=choice;});
         }else RenderComponentProfessionLabel(profession);
+        if(profession.empty())ImGui::TextDisabled("Profession unresolved; recorded fields retained.");
         ComponentNativeSpecializations(data,profession);
     } else if (AlterEgo::Composable::IsCompanionKind(kind)) {
         ComponentNativeProfessionPair(data,AlterEgo::Composable::CompanionField(kind),kind=="pets"?"Pets":"Legends",kind=="legends",true,ComponentUIEliteContexts(kind,id));
@@ -830,7 +837,6 @@ static void RenderComponentNativeEditor(const std::string& kind,
             RenderInactiveRevenantOrder(*inactive,AlterEgo::SkillEdit::ReadInactiveLegendContext(data),ICON_SIZE);
         else if(data.contains("inactive_rev_skills"))ImGui::TextDisabled("Unrecognized inactive utility order; retained");
     } else if (kind == "relic") {
-        RenderComponentGearCards(kind,data,{});
         ComponentNativeCatalogChoice(data, "relic_id", "relic_name", "relic");
         if (ImGui::TreeNode("##advanced_relic", "Advanced exact relic item ID")) {
             ComponentNativeNumber(data, "relic_id", "Relic item ID");

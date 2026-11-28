@@ -340,16 +340,6 @@ static AlterEgo::SavedBuild ComponentGearDisplay(const std::string& kind,const C
         }
     return build;
 }
-static unsigned ComponentEquipmentSections(const std::string& kind){
-    using namespace AlterEgo::UI;
-    if(kind=="armor"||kind=="runes")return ArmorSection;
-    if(kind=="trinkets")return TrinketSection;
-    if(kind=="weapons"||kind=="sigils")return WeaponSection;
-    if(kind=="infusions")return ArmorSection|TrinketSection|WeaponSection;
-    if(kind=="aquatic")return AquaticSection;
-    if(kind=="relic")return RelicSection;
-    return 0;
-}
 static void RenderComponentGearCards(const std::string& kind,const ComponentJson& data,const std::string& profession,
         const std::function<void(const std::string&)>& choose={},const std::function<void(const std::string&)>& context={},
         const std::string& selected={}){
@@ -380,13 +370,25 @@ static void RenderComponentGearCards(const std::string& kind,const ComponentJson
             else actions.context=[&]{ComponentStoredNameActions(data.at("gear").at(slot));};
         }
         if(actions.upgradeOnly)actions.label=GearSlotDisplayName(slot);
+        if(found!=build.gear.end()){
+            const auto& item=found->second;
+            if(item.item_id&&!item.stat_id&&item.stat_name.empty()&&item.weapon_type.empty()){
+                const auto info=AlterEgo::GW2API::GetItemInfo(item.item_id);
+                if(info&&!info->name.empty())actions.lines.push_back(info->name);
+                else if(recorded&&gear->at(slot).is_object()&&gear->at(slot).contains("item_name")&&gear->at(slot).at("item_name").is_string())
+                    actions.lines.push_back(gear->at(slot).at("item_name").get<std::string>());
+                else actions.lines.push_back("Item metadata pending");
+            }
+            if(kind=="infusions")for(size_t i=0;i<AlterEgo::GearEdit::InfusionPositionCount(item);++i)
+                actions.lines.push_back(InfusionPositionLabel(AlterEgo::GearEdit::InfusionPositionAt(item,i)));
+        }
         if(recorded&&!gear->at(slot).is_object())actions.label=std::string(GearSlotDisplayName(slot))+" (unresolved)";
         if(kind=="relic"){
             actions.icon=build.relic_id;
             if(build.relic_id||!build.relic_name.empty())actions.context=[&]{RenderSavedGearEntityMenu(nullptr,true,build.relic_id,build.relic_name);};
         }
         RenderBuildGearSlot(build,slot.c_str(),false,&actions);
-    },[](const char* title,int){RenderSectionHeader(title,AlterEgo::UI::SectionGold);},ComponentEquipmentSections(kind));
+    },[](const char* title,int){RenderSectionHeader(title,AlterEgo::UI::SectionGold);},AlterEgo::EquipmentChoice::ComponentSections(kind));
 }
 
 static void RenderComponentInventory(const std::string& kind, const ComponentJson& data) {
@@ -438,7 +440,7 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             RenderInactiveRevenantOrder(*inactive,SE::ReadInactiveLegendContext(data),ICON_SIZE);
         else if(data.contains("inactive_rev_skills"))ImGui::TextDisabled("Unrecognized inactive utility order; retained");
     }
-    if(ComponentEquipmentSections(kind)&&kind!="relic"&&
+    if(AlterEgo::EquipmentChoice::ComponentSections(kind)&&kind!="relic"&&
        (kind!="infusions"||AlterEgo::Composable::InfusionPayloadMode(data)!=AlterEgo::InfusionMode::Totals)){
         RenderComponentGearCards(kind,data,ComponentUIProfession(kind,data));
         if(data.contains("gear")&&!data.at("gear").is_object())ImGui::TextDisabled("Unsupported recorded gear; retained.");

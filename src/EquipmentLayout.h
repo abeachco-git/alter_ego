@@ -1,5 +1,6 @@
 #pragma once
 #include "AddonShared.h"
+#include "EquipmentChoiceCore.h"
 #include <algorithm>
 #include <string>
 
@@ -27,7 +28,12 @@ struct EquipmentText {
         ImGui::Dummy(ImVec2(0,0));
     }
 };
-enum EquipmentSections : unsigned { ArmorSection=1,TrinketSection=2,WeaponSection=4,RelicSection=8,AquaticSection=16,AllEquipmentSections=31 };
+using EquipmentChoice::ArmorSection;
+using EquipmentChoice::TrinketSection;
+using EquipmentChoice::WeaponSection;
+using EquipmentChoice::RelicSection;
+using EquipmentChoice::AquaticSection;
+using EquipmentChoice::AllEquipmentSections;
 template<class Slot,class Header>
 void EquipmentLayout(const char* id,bool aquatic,Slot slot,Header header,unsigned sections=AllEquipmentSections){
     ImGui::PushID(id);

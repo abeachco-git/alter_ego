@@ -8947,6 +8947,7 @@ struct ComponentGearCardActions {
     std::function<void()> choose,context;
     uint32_t icon=0;
     std::string label;
+    std::vector<std::string> lines;
     bool recorded=false,selected=false,upgradeOnly=false;
 };
 static void RenderBuildGearSlot(AlterEgo::SavedBuild& build,const char* slot,bool editable,
@@ -9127,6 +9128,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build,const char* slot,boo
         text.Line(it->second.sigil,IM_COL32(153,153,255,255));
         text.Line(it->second.sigil2,IM_COL32(153,153,255,255));
     }
+    if(component)for(const auto& line:component->lines)text.Line(line,IM_COL32(160,225,255,255));
     if(component&&component->context){text.ContextTarget();AlterEgo::UI::EntityContext("##saved_gear_text",component->context);}
     else if(!component&&!disabled&&hasData){text.ContextTarget();AlterEgo::UI::EntityContext("##saved_gear_text",savedGearActions);}
     text.Finish();

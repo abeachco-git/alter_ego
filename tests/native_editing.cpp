@@ -114,6 +114,18 @@ int case_native_editing(int,char**) {
     wrongBase["profession"]="Necromancer";
     assert(!Composable::CopyEditedForLoadout(doc,"a","base_build","new-base","New Base",wrongBase,err,baseId));
     assert(doc.loadouts[0].refs.at("base_build")==baseId);
+    {
+        auto graph=doc;
+        auto unused=*Composable::Find(graph,"base_build",baseId);
+        unused.id="unused-base";unused.name="Unused Engineer Base";
+        graph.components["base_build"].push_back(unused);
+        assert(!Composable::UpdateShared(graph,"base_build",unused.id,wrongBase,err));
+        assert(!Composable::UpdateSharedNamed(graph,"base_build",unused.id,"Wrong Base",wrongBase,err));
+        assert(Composable::Find(graph,"base_build",unused.id)->data==unused.data);
+        auto unknown=unused;unknown.id="unknown-base";unknown.name="Unknown Base";unknown.data.erase("profession");
+        graph.components["base_build"].push_back(unknown);
+        assert(!Composable::Assign(graph,"a","base_build",unknown.id,err));
+    }
     assert(VerifiedSkillsProfession(doc,skills)=="Engineer");
     // Aggregate modification must not bypass private/shared Base Build guards.
     auto wrongLoadout=a;wrongLoadout["profession"]="Necromancer";
