@@ -448,6 +448,7 @@ template<class Bar> bool SetSlotWithPaletteEvidence(Bar& bar,
     const bool retired=RetirePaletteEdits(evidence,aquatic,before,DisplayBar(bar),
         static_cast<uint8_t>(1u<<slot));
     return changed||retired;
+}
 // Native JSON adapter: retain sparse and trailing fields; pad only on an
 // explicit utility edit, and retire exactly the changed wire positions.
 template<class Json> bool SetJsonSlotWithPaletteEvidence(Json& data,bool aquatic,int slot,uint32_t next){
@@ -470,7 +471,5 @@ template<class Json> bool SetJsonSlotWithPaletteEvidence(Json& data,bool aquatic
         data["rev_active_palettes"]=*evidence;
     data[key]=std::move(bar);
     return true;
-}
-
 }
 }
