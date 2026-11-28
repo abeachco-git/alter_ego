@@ -448,5 +448,29 @@ template<class Bar> bool SetSlotWithPaletteEvidence(Bar& bar,
     const bool retired=RetirePaletteEdits(evidence,aquatic,before,DisplayBar(bar),
         static_cast<uint8_t>(1u<<slot));
     return changed||retired;
+// Native JSON adapter: retain sparse and trailing fields; pad only on an
+// explicit utility edit, and retire exactly the changed wire positions.
+template<class Json> bool SetJsonSlotWithPaletteEvidence(Json& data,bool aquatic,int slot,uint32_t next){
+    if(!data.is_object()||slot<0||slot>=5)return false;
+    const char* key=aquatic?"aquatic_skills":"skills";
+    if(data.contains(key)&&!data.at(key).is_object())return false;
+    Json bar=data.value(key,Json::object());
+    const auto before=JsonDisplayBar(bar);
+    auto evidence=ReadPaletteEvidence(data);
+    const auto displayed=WithPaletteEvidence(before[slot],evidence,aquatic,slot,false);
+    if(displayed.id==next&&displayed.evidence!=SlotEvidence::Unresolved)return false;
+    if(slot==0||slot==4)bar[slot==0?"heal":"elite"]=next;
+    else{
+        Json utilities=bar.contains("utilities")&&bar.at("utilities").is_array()?bar.at("utilities"):Json::array();
+        while(utilities.size()<3)utilities.push_back(0);
+        SetUtility(utilities,slot-1,next);
+        bar["utilities"]=std::move(utilities);
+    }
+    if(RetirePaletteEdits(evidence,aquatic,before,JsonDisplayBar(bar),static_cast<uint8_t>(1u<<slot)))
+        data["rev_active_palettes"]=*evidence;
+    data[key]=std::move(bar);
+    return true;
+}
+
 }
 }

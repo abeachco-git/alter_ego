@@ -7415,6 +7415,26 @@ static bool RenderSkillEditorSlot(uint32_t current,float size,const std::string&
     return changed;
 }
 
+// Canonical editable skill strip; callers supply evidence and own mutations.
+template<class Apply> static void RenderSkillEditorBar(
+    const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,float size,
+    const std::string& profession,const std::vector<uint32_t>& specs,
+    bool allowAnySpec,bool aquatic,bool advanced,Apply apply){
+    namespace SE=AlterEgo::SkillEdit;
+    DemandSkillBarMetadata(slots,aquatic);
+    const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,5);
+    ImGui::PushID("editable_skill_bar");
+    for(size_t i=0;i<slots.size();++i){
+        if(i%columns)ImGui::SameLine();
+        ImGui::PushID(static_cast<int>(i));
+        uint32_t next=slots[i].id;
+        if(RenderSkillEditorSlot(next,size,profession,SE::SlotRole(i),specs,allowAnySpec,aquatic,advanced,next,SE::SlotLabel(i),slots[i].evidence))
+            apply(static_cast<int>(i),next);
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+}
+
 // Both native editors use this field-scoped selector. The catalog does not
 // record environment eligibility, so never invent an aquatic restriction.
 // Selected slots share geometry and exact entity actions in read and edit modes.
@@ -9288,17 +9308,10 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool ed
     }else{
         std::vector<uint32_t> specs;
         for(const auto& spec:src.specializations)if(spec.spec_id)specs.push_back(spec.spec_id);
-        const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,sz,ImGui::GetStyle().ItemSpacing.x,5);
-        for(size_t i=0;i<slots.size();++i){
-            if(i%columns)ImGui::SameLine();
-            ImGui::PushID(static_cast<int>(i)+700);
-            uint32_t next=slots[i].id;
-            if(RenderSkillEditorSlot(next,sz,src.profession,SE::SlotRole(i),specs,false,aquatic,false,next,SE::SlotLabel(i),slots[i].evidence)){
-                auto& draft=aquatic?g_EditDraft.aquatic_skills:g_EditDraft.terrestrial_skills;
-                if(SE::SetSlotWithPaletteEvidence(draft,g_EditDraft.rev_active_palettes,aquatic,static_cast<int>(i),next))MarkEditDirty();
-            }
-            ImGui::PopID();
-        }
+        RenderSkillEditorBar(slots,sz,src.profession,specs,false,aquatic,false,[&](int slot,uint32_t next){
+            auto& draft=aquatic?g_EditDraft.aquatic_skills:g_EditDraft.terrestrial_skills;
+            if(SE::SetSlotWithPaletteEvidence(draft,g_EditDraft.rev_active_palettes,aquatic,slot,next))MarkEditDirty();
+        });
     }
     ImGui::PopID();
 }

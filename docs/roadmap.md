@@ -65,3 +65,7 @@ Future implementation batches retain the exact-commit regression/build/DLL-deliv
 
 Parts 7–8 and other completed implementation acceptance, discretionary performance measurements and non-live verification remain in [development status](development-status.md); release-only gates remain in [release checklist](release-checklist.md). Do not duplicate those lists here. No approved implementation is complete without exact-commit required build gates and verified DLL delivery per AGENTS.md.
 
+
+## Component editor presentation (approved Skills / shared cleanup)
+
+- Verify the common editable skill strip, compact standalone Skills workspace, explicit JSON slot mutation, independent duplicate specialization scope and removal of the shared raw editor panel through the required DLL workflow and live checks. Other category-specific graphical editor consolidation and raw equipment detail presentation remain proposals pending review.

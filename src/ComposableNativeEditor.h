@@ -71,6 +71,7 @@ static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
     const std::string& componentId) {
     std::vector<uint32_t> common;
     bool found = false;
+    if(g_ComponentEditorMode!="edit"&&g_ComponentEditorMode!="copy_for_loadout")return {common,found};
     const auto& doc = ComponentUISnapshot();
     if (!doc.contains("loadouts") || !doc["loadouts"].is_array())
         return {common, found};
@@ -105,89 +106,31 @@ static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
     return {common, found};
 }
 
-static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const char* label,
-        const char* role,const std::string& profession,const std::vector<uint32_t>& specs,bool allowAnySpec,bool aquatic,
-        const std::optional<AlterEgo::RevenantActivePaletteEvidence>& evidence,size_t index){
-    namespace SE=AlterEgo::SkillEdit;
-    ImGui::PushID(key);
-    const auto slot=SE::WithPaletteEvidence(parent.contains(key)?SE::JsonDisplaySlot(parent[key]):SE::DisplaySlot{},evidence,aquatic,index,false);
-    const uint32_t id=slot.id;
-    bool changed=false;
-    const float available=ImGui::GetContentRegionAvail().x;
-    const float labelWidth=std::max(90.f,ImGui::CalcTextSize("Utility 3").x+ImGui::GetStyle().ItemSpacing.x);
-    ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);
-    if(available>=labelWidth+38.f+100.f)ImGui::SameLine(0.f,std::max(4.f,labelWidth-ImGui::CalcTextSize(label).x));
-    uint32_t next=id;
-    if(RenderSkillEditorSlot(id,38.0f,profession,role,specs,allowAnySpec,aquatic,true,next,label,slot.evidence)){
-        parent[key]=next;changed=true;
-    }
-    const auto info=id?AlterEgo::GW2API::GetSkillInfo(id):nullptr;
-     std::string detail=id?(info&&!info->name.empty()?info->name:"Metadata pending"):SE::MissingSlotLabel(slot.evidence);
-    if(aquatic&&id&&(!info||!info->no_underwater.has_value()||info->no_underwater.value_or(false)))
-        detail+=info&&info->no_underwater.value_or(false)?" [NoUnderwater]":" [eligibility unknown]";
-    if(available>=labelWidth+38.f+100.f)ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s",detail.c_str());
-    ImGui::PopStyleColor();
-    ImGui::PopID();return changed;
-}
-
 static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
                                     const char* title,
                                     const std::string& profession,
                                     const std::vector<uint32_t>& specs,
                                     bool allowAnySpec) {
-    if (!ImGui::TreeNodeEx(key, ImGuiTreeNodeFlags_DefaultOpen, "%s", title)) return;
     namespace SE=AlterEgo::SkillEdit;
     const bool aquatic=std::string(key)=="aquatic_skills";
-    auto evidence=SE::ReadPaletteEvidence(data);
-    const bool missing=!data.contains(key);
-    // A genuinely absent bar still uses the explicit Add action. An evidence-
-    // only bar can use the normal slot editor without materializing on view.
-    if (missing&&!SE::HasPaletteBarEvidence(evidence,aquatic)) {
-        if (RenderActionButton((std::string("Add ") + title + "##bar").c_str()))
-            data[key] = {{"heal", 0},
-                         {"utilities", ComponentJson::array({0, 0, 0})},
-                         {"elite", 0}};
-        ImGui::TreePop();
-        return;
-    }
-    if (!missing&&!data[key].is_object()) {
-        ImGui::TextDisabled("Unsupported skill format; existing value preserved.");
-        ImGui::TreePop();
-        return;
-    }
-    ComponentJson transient=ComponentJson::object();
-    auto& bar=missing?transient:data[key];
-    const auto before=SE::JsonDisplayBar(bar);
-    uint8_t explicitSlots=0;
-    if(ComponentNativeSkill(bar, "heal", "Heal", "Heal",
-                         profession, specs, allowAnySpec,aquatic,evidence,0))explicitSlots|=1;
-    ComponentJson utilities = bar.contains("utilities") &&
-        bar["utilities"].is_array() ? bar["utilities"] : ComponentJson::array();
-    for (int i = 0; i < 3; ++i) {
-        ImGui::PushID(i);
-        ComponentJson field=ComponentJson::object();
-        if(static_cast<size_t>(i)<utilities.size())field["skill"]=utilities[i];
-        if (ComponentNativeSkill(field, "skill",
-                (std::string("Utility ") + std::to_string(i+1)).c_str(),
-                "Utility", profession, specs, allowAnySpec,aquatic,evidence,i+1)) {
-            // The established portable utility format is integer-only and
-            // positional. Pad only on an explicit edit, never on inspection.
-            while(utilities.size()<=static_cast<size_t>(i))utilities.push_back(0);
-            while(utilities.size()<3)utilities.push_back(0);
-            SE::SetUtility(utilities,i,field["skill"].get<uint32_t>());
-            bar["utilities"]=utilities;
-            explicitSlots|=static_cast<uint8_t>(1u<<(i+1));
+    ImGui::PushID(key);
+    if(ImGui::TreeNodeEx("##bar",ImGuiTreeNodeFlags_DefaultOpen,"%s",title)){
+        const auto evidence=SE::ReadPaletteEvidence(data);
+        const bool missing=!data.contains(key);
+        if(missing&&!SE::HasPaletteBarEvidence(evidence,aquatic)){
+            if(RenderActionButton((std::string("Add ")+title+"##bar").c_str()))
+                data[key]={{"heal",0},{"utilities",ComponentJson::array({0,0,0})},{"elite",0}};
+        }else if(!missing&&!data[key].is_object()){
+            ImGui::TextDisabled("Unsupported skill format; existing value preserved.");
+        }else{
+            const auto slots=SE::JsonPaletteDisplayBar(data.value(key,ComponentJson::object()),evidence,aquatic);
+            RenderSkillEditorBar(slots,ICON_SIZE,profession,specs,allowAnySpec,aquatic,true,[&](int slot,uint32_t next){
+                SE::SetJsonSlotWithPaletteEvidence(data,aquatic,slot,next);
+            });
         }
-        ImGui::PopID();
+        ImGui::TreePop();
     }
-    if(ComponentNativeSkill(bar, "elite", "Elite", "Elite",
-                         profession, specs, allowAnySpec,aquatic,evidence,4))explicitSlots|=16;
-    if(SE::RetirePaletteEdits(evidence,aquatic,before,SE::JsonDisplayBar(bar),explicitSlots))
-        data["rev_active_palettes"]=*evidence;
-    if(missing&&explicitSlots)data[key]=std::move(transient);
-    ImGui::TreePop();
+    ImGui::PopID();
 }
 
 static void ComponentNativeSpecializations(ComponentJson& data,
@@ -1044,6 +987,9 @@ static void RenderComponentNativeEditor(const std::string& kind,
                                 profession, specContext.first, !specContext.second);
         ComponentNativeSkillBar(data, "aquatic_skills", "Aquatic skills",
                                 profession, specContext.first, !specContext.second);
+        if(const auto inactive=AlterEgo::SkillEdit::ReadInactivePalettes(data))
+            RenderInactiveRevenantOrder(*inactive,AlterEgo::SkillEdit::ReadInactiveLegendContext(data),ICON_SIZE);
+        else if(data.contains("inactive_rev_skills"))ImGui::TextDisabled("Unrecognized inactive utility order; retained");
     } else if (kind == "relic") {
         ComponentNativeCatalogChoice(data, "relic_id", "relic_name", "relic");
         if (ImGui::TreeNode("##advanced_relic", "Advanced exact relic item ID")) {
@@ -1064,10 +1010,5 @@ static void RenderComponentNativeEditor(const std::string& kind,
         }
         if(kind!="infusions"||ComponentNativeInfusionRequirements(data))
             ComponentNativeGear(data,kind,profession);
-    }
-    if (ImGui::CollapsingHeader("Advanced: exact stored fields (read only)")) {
-        ImGui::BeginChild("##component_native_json", ImVec2(0, 130), true);
-        ImGui::TextUnformatted(data.dump(2).c_str());
-        ImGui::EndChild();
     }
 }

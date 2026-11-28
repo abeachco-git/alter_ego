@@ -528,7 +528,9 @@ static void RenderComponentUIEditor() {
     if(!g_ComponentEditorOpen)return;
     const auto display=ImGui::GetIO().DisplaySize;
     const ImVec2 maxSize(std::max(1.f,display.x-24.f),std::max(1.f,display.y-24.f));
-    ImGui::SetNextWindowSize(ImVec2(std::min(750.f,maxSize.x),std::min(660.f,maxSize.y)),ImGuiCond_Appearing);
+    // Skills now use compact icon strips; retain resizable workspaces for every category.
+    const bool compactSkills=g_ComponentEditorKind=="skills";
+    ImGui::SetNextWindowSize(ImVec2(std::min(compactSkills?560.f:750.f,maxSize.x),std::min(compactSkills?440.f:660.f,maxSize.y)),ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(340.f,maxSize.x),std::min(240.f,maxSize.y)),maxSize);
     bool windowOpen=true;
     if (!ImGui::BeginPopupModal("Component editor##ae_components",&windowOpen)){

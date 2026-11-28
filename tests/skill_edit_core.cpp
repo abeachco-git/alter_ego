@@ -225,6 +225,22 @@ int case_skill_edit_core(int,char**) {
         auto reverse=[](uint32_t){return 0u;};
         assert(ProjectRevenantPalette(evidence,0,0,0,packet,reverse)==0);
         assert(ProjectRevenantPalette(evidence,0,0,1,packet,reverse)==0);
+        J native=payload;
+        native["extension"]="retained";
+        const auto unchanged=native;
+        assert(!SetJsonSlotWithPaletteEvidence(native,false,3,0)&&native==unchanged);
+        assert(SetJsonSlotWithPaletteEvidence(native,false,0,0));
+        assert(native["skills"]==J({{"heal",0}})&&native["extension"]=="retained");
+        native["skills"]["utilities"]=J::array({0,88,0,999});
+        native["skills"]["extra"]="retained";
+        assert(SetJsonSlotWithPaletteEvidence(native,false,1,88));
+        assert(native["skills"]["utilities"]==J::array({88,0,0,999}));
+        assert(native["skills"]["extra"]=="retained");
+        const auto updated=ReadPaletteEvidence(native);
+        assert(updated&&(*updated)[0][0]==0&&(*updated)[1][0]==0&&(*updated)[2][0]==0&&(*updated)[9][0]==126);
+        const auto stable=native;
+        assert(!SetJsonSlotWithPaletteEvidence(native,false,1,88)&&native==stable);
+        assert(SetJsonSlotWithPaletteEvidence(native,true,4,0)&&native["aquatic_skills"]==J({{"elite",0}}));
         auto invalid=payload;invalid["rev_active_palettes"][1][0]=65536;
         assert(!ReadPaletteEvidence(invalid));
     }
